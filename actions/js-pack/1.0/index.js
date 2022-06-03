@@ -137,17 +137,28 @@ async function run() {
     logWarn('work_dir not set, generally you can set to "${{ dirs.git-checkout }}"');
     process.exit(1);
   }
-  output('hello', 'world');
   // 把代码复制到 WORKDIR 里，因为不知道编译输出的目录名是什么，没法只把编译完的内容复制过来
   await runCmd(`cp -r ${env.ACTION_WORKDIR}/* ${env.WORKDIR}`);
   logInfo('Copy git checkout files to working directory finished');
 
   const buildCmdPrefix = `. ~/.nvm/nvm.sh && nvm use ${NODE_VERSION} && `;
-  const buildCmd = env.ACTION_BUILD_CMD || 'npm run build';
-  logInfo('Execute build_cmd: ', buildCmd)
-  const runSuccess = await runCmd(buildCmdPrefix + buildCmd);
+  const runResult = [];
+  if (env.ACTION_BUILD_CMD && env.ACTION_BUILD_CMD.startsWith('["')) {
+    const cmdList = JSON.parse(env.ACTION_BUILD_CMD);
+    for (let i = 0; i < cmdList.length; i++) {
+      const buildCmd = cmdList[i];
+      logInfo(`Execute build_cmd part ${i + 1}: `, buildCmd)
+      const runSuccess = await runCmd(buildCmdPrefix + buildCmd);
+      runResult.push(runSuccess);
+    }
+  } else {
+    const buildCmd = env.ACTION_BUILD_CMD || 'npm run build';
+    logInfo('Execute build_cmd: ', buildCmd)
+    const runSuccess = await runCmd(buildCmdPrefix + buildCmd);
+    runResult.push(runSuccess);
+  }
   await writeMetaFile();
-  if (runSuccess !== false) {
+  if (runResult.every(r => r !== false)) {
     logInfo('🎉 Build success')
   } else {
     setTimeout(() => {
