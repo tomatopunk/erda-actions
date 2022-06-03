@@ -1,18 +1,27 @@
 import { spawn } from 'child_process';
-import c from 'ansi-colors';
-
-var navigator = {};
+import color from 'ansi-colors';
+import { writeFile } from 'fs/promises';
 
 
 const { env } = process;
 const NODE_VERSION = env.ACTION_NODE_VERSION || 14;
+const PRESERVE_TIME = env.ACTION_PRESERVE_TIME;
+const nodeVerMap = {
+  12: 'v12.22.5',
+  14: 'v14.19.0',
+}
+const faqUrl = 'https://docs.erda.cloud/latest/manual/faq/faq.html';
 
-const { log } = console;
-const logPrefix = '[js pack]'
-const logInfo = (...msg) => log(c.blue(logPrefix), ...msg);
-const logSuccess = (...msg) => log(c.green('✅', logPrefix), ...msg);
-const logWarn = (...msg) => log(c.yellow('❗️', logPrefix), ...msg);
-const logError = (...msg) => log(c.red('❌', logPrefix), ...msg);
+const logPrefix = '[js pack] '
+const logInfo = (...msg) => console.log(color.greenBright(logPrefix + msg.join('')));
+// const logSuccess = (...msg) => console.log(color.greenBright('✅', logPrefix));
+const logWarn = (...msg) => console.log(color.yellowBright(logPrefix + msg.join('')));
+const logError = (...msg) => console.error(color.redBright(logPrefix + msg.join('')));
+
+const getBlockTitle = (title = '', char = '=') => {
+  const half = 100 > title.length ? Math.floor((100 - title.length) / 2) : 0;
+  return char.repeat(half) + ' ' + title + ' ' + char.repeat(half)
+}
 
 
 async function sleep(seconds) {
@@ -20,64 +29,134 @@ async function sleep(seconds) {
     setTimeout(() => {
       resolve();
     }, seconds * 1000);
-  }).then(run)
+  })
 }
 
-function execCMD(cmd) {
-  return new Promise(function (resolve, reject) {
-    const cmdPrefix = `source ~/.nvm/nvm.sh && nvm use ${NODE_VERSION} && `;
+const metadata = [];
+function output(name, value) {
+  metadata.push({ name, value });
+}
+
+async function writeMetaFile() {
+  if (metadata.length) {
+    const data = JSON.stringify({ metadata });
     try {
-      const newProcess = spawn(cmdPrefix + cmd, [], { stdio: 'inherit', shell: true, env: process.env });
-      newProcess.on('close', resolve);
-      newProcess.on('error', e => {
-        logError(e)
-        reject(e);
+      await writeFile(env.METAFILE, data)
+      logInfo('write output to metafile success');
+      logInfo(data);
+    } catch (error) {
+      logError('write output to metafile failed', error);
+    }
+  }
+}
+
+async function execCMD(cmd) {
+  return new Promise(function (resolve, reject) {
+    try {
+      const childProcess = spawn(cmd, [], { stdio: [process.stdin, process.stdout, 'pipe'], shell: true, env: process.env });
+      childProcess.on('close', resolve);
+      childProcess.on('error', reject);
+      childProcess.on('exit', (code, signal) => {
+        if (code) {
+          reject(`Command '${cmd}' failed with code ${code}`)
+        } else if (signal) {
+          reject(`Command '${cmd}' process was killed with signal ${signal}`);
+        } else {
+          // logInfo(`Command \`${cmd}\` execute finished`);
+        }
+      });
+      childProcess.stderr.on('data', (data) => {
+        const str = data.toString();
+        process.stderr.write(data);
+
+        const memoryOverflow = str.startsWith('npm ERR! errno 137');
+        if (memoryOverflow) {
+          logError(`Memory overflow, should set --max_old_space_size in build_cmd, view ${faqUrl} for detail`)
+        }
+
+        const happypackErr = str.startsWith('Happythread[babel:0] unable to send to worker');
+        if (happypackErr) {
+          logError(`Please set 'threads: 1' in happypack config, view ${faqUrl} for detail`)
+        }
+
+        // find npm error log file in output
+        const npmLogFile = /\s+([\S]+-debug\.log)$/mg.exec(str);
+        if (npmLogFile && npmLogFile[1]) {
+          const fileName = npmLogFile[1];
+          process.nextTick(() => { // prevent output out of order
+            runCmd('cat ' + npmLogFile[1] + ' >&2', {
+              before: () => logError(getBlockTitle(fileName + ' start')),
+              after: () => logError(getBlockTitle(fileName + ' end'))
+            });
+          });
+        }
       });
 
     } catch (error) {
       reject(error);
-      return;
     }
   });
 }
 
-async function runCmd(cmdStr, name) {
+async function runCmd(cmdStr, hooks = {}) {
   if (!cmdStr) {
-    logWarn(name, 'is empty');
     return false;
   }
-  logInfo(cmdStr)
 
-  try {
-    await execCMD(cmdStr);
-  } catch (e) {
-    logError(e);
+  if (hooks.before) {
+    await hooks.before();
+  }
+  let success = false;
+  await execCMD(cmdStr).catch(async e => {
+    e && logError(e);
 
-    const npmLogFile = /^npm ERR! ([\s\S]+\.log)$/g.exec(e.message);
-    if (npmLogFile && npmLogFile[1]) {
-      logInfo('NPM error log content:\n');
-      await runCmd('cat ' + npmLogFile[1]);
-      if (env.ACTION_WAIT_TIME) {
-        await sleep(+env.ACTION_WAIT_TIME)
-      }
+    if (PRESERVE_TIME) {
+      logInfo('Job container preserve time: ', PRESERVE_TIME);
+      logInfo(`You can use terminal to debug, view ${faqUrl} for detail`)
+      await sleep(+PRESERVE_TIME)
+    } else {
+      logWarn('You can set \'preserve_time\' in action params to keep this job container running, and use terminal to debug');
     }
-
-    return false;
-    // process.exit(-1);
-  }
+    success = false;
+  }).finally(() => {
+    if (hooks.after) hooks.after();
+  });
+  return success;
 }
 
 async function run() {
-  navigator.userAgent = '';
-  console.log(navigator.userAgent);
-  logInfo('='.repeat(100));
-  logInfo('Important! please set `threads:1` if you use happypack for parallel compile');
-  logInfo('Node Version: ' + NODE_VERSION);
-  logInfo('Working directory: ', process.cwd());
-  logInfo('='.repeat(100));
-  const runSuccess = await runCmd(env.ACTION_BUILD_CMD || 'npm run build', 'BUILD_CMD');
+  logInfo(getBlockTitle('Build Env', '='));
+  logInfo('Node Version: ' + nodeVerMap[NODE_VERSION]);
+  // 流水线会把 WORKDIR 目录内的东西共享给后面的 action
+  logInfo('Working directory: ', env.WORKDIR);
+  logInfo('NAMESPACE: ', env.DICE_NAMESPACE);
+  logInfo('PIPELINE_LIMITED_CPU: ', env.PIPELINE_LIMITED_CPU);
+  logInfo('PIPELINE_LIMITED_MEM: ', env.PIPELINE_LIMITED_MEM);
+  logInfo(getBlockTitle('Build Env', '='));
+  if (!env.ACTION_WORKDIR) {
+    logWarn('work_dir not set, generally you can set to "${{ dirs.git-checkout }}"');
+    process.exit(1);
+  }
+  output('hello', 'world');
+  // 把代码复制到 WORKDIR 里，因为不知道编译输出的目录名是什么，没法只把编译完的内容复制过来
+  await runCmd(`cp -r ${env.ACTION_WORKDIR}/* ${env.WORKDIR}`);
+  logInfo('Copy git checkout files to working directory finished');
+
+  const buildCmdPrefix = `. ~/.nvm/nvm.sh && nvm use ${NODE_VERSION} && `;
+  const buildCmd = env.ACTION_BUILD_CMD || 'npm run build';
+  logInfo('Execute build_cmd: ', buildCmd)
+  const runSuccess = await runCmd(buildCmdPrefix + buildCmd);
+  await writeMetaFile();
   if (runSuccess !== false) {
-    logSuccess('🎉build success')
+    logInfo('🎉 Build success')
+  } else {
+    setTimeout(() => {
+      const fileMsg = `❌ Build failed, you can view ${faqUrl} to search for common failure causes`;
+      // print to stdout and stderr both
+      logWarn(fileMsg)
+      logError(fileMsg)
+      process.exit(1);
+    }, 100)
   }
 }
 

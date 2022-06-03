@@ -9,8 +9,10 @@
   },
   "scripts": {
     "prebuild": "rm -rf dist && mkdir dist && rollup --config rollup.config.js",
-    "build": "pkg dist/index.js -t node14-linux -o run",
-    "image": "docker build -f Dockerfile -t js-pack:1 .",
+    "build": "pkg dist/index.js -t node14-linux-x64 -o run",
+    "image": "docker build -f Dockerfile -t js-pack:1.4 .",
+    "all": "npm run build && npm run image && docker tag js-pack:1.4 daskyrk/js-pack:1.4 && docker push daskyrk/js-pack:1.4",
+    "prebuild:mac": "rm -rf dist && mkdir dist && rollup --config rollup.config.js",
     "build:mac": "pkg dist/index.js -t node14-macos -o run-mac"
   },
   "keywords": [],
