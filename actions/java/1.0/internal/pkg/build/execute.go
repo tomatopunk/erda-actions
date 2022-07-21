@@ -4,8 +4,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"github.com/erda-project/erda/apistructs"
-	"github.com/erda-project/erda/pkg/filehelper"
 	"io/ioutil"
 	"os"
 	"os/exec"
@@ -13,6 +11,10 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/erda-project/erda/apistructs"
+	"github.com/erda-project/erda/pkg/filehelper"
+	"github.com/erda-project/erda/pkg/metadata"
 
 	"github.com/erda-project/erda/pkg/envconf"
 	"github.com/erda-project/erda/pkg/strutil"
@@ -288,7 +290,7 @@ func build(cfg conf.Conf) error {
 // storeMetaFile store meta data
 func storeMetaFile(cfg *conf.Conf, image string) error {
 	meta := apistructs.ActionCallback{
-		Metadata: apistructs.Metadata{
+		Metadata: metadata.Metadata{
 			{
 				Name:  "image",
 				Value: image,
