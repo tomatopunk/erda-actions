@@ -13,10 +13,9 @@ import (
 	"strings"
 
 	"github.com/erda-project/erda/apistructs"
+	"github.com/erda-project/erda/pkg/envconf"
 	"github.com/erda-project/erda/pkg/filehelper"
 	"github.com/erda-project/erda/pkg/metadata"
-
-	"github.com/erda-project/erda/pkg/envconf"
 	"github.com/erda-project/erda/pkg/strutil"
 	"github.com/pkg/errors"
 
